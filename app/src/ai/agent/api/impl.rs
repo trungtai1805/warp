@@ -7,7 +7,10 @@ use warp_multi_agent_api as api;
 
 use crate::server::server_api::ServerApi;
 
-use super::{convert_to::convert_input, ConvertToAPITypeError, RequestParams, ResponseStream};
+use super::{
+    convert_to::convert_input, openai_compatible, ConvertToAPITypeError, RequestParams,
+    ResponseStream,
+};
 
 pub async fn generate_multi_agent_output(
     server_api: Arc<ServerApi>,
@@ -20,7 +23,7 @@ pub async fn generate_multi_agent_output(
         .unwrap_or_else(|| get_supported_tools(&params));
     let supported_cli_agent_tools = get_supported_cli_agent_tools(&params);
     let mut logging_metadata = HashMap::new();
-    if let Some(metadata) = params.metadata {
+    if let Some(metadata) = params.metadata.as_ref() {
         logging_metadata.insert(
             "is_autodetected_user_query".to_owned(),
             prost_types::Value {
@@ -49,6 +52,10 @@ pub async fn generate_multi_agent_output(
 
     if params.should_redact_secrets {
         redaction::redact_inputs(&mut params.input);
+    }
+
+    if openai_compatible::should_use(&params) {
+        return openai_compatible::generate_multi_agent_output(params, cancellation_rx).await;
     }
 
     let mut api_keys = params.api_keys;

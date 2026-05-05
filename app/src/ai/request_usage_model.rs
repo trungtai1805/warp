@@ -399,8 +399,11 @@ impl AIRequestUsageModel {
 
         // If you have provided your own API key,
         // it doesn't matter if you are out of warp-provided requests.
+        let api_key_manager = ApiKeyManager::as_ref(ctx);
         let has_byo_api_key = UserWorkspaces::as_ref(ctx).is_byo_api_key_enabled()
-            && ApiKeyManager::as_ref(ctx).keys().has_any_key();
+            && api_key_manager.keys().has_any_key();
+        let has_local_openai_compatible_config =
+            api_key_manager.keys().has_openai_compatible_config();
 
         has_base_plan_ai_requests
             || (user_bonus_credits || workspace_bonus_credits)
@@ -408,6 +411,7 @@ impl AIRequestUsageModel {
             || is_payg_enabled
             || is_enterprise_auto_reload_enabled
             || has_byo_api_key
+            || has_local_openai_compatible_config
     }
 
     pub fn requests_used(&self) -> usize {

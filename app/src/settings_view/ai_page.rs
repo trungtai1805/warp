@@ -6307,6 +6307,9 @@ struct ApiKeysWidget {
     openai_api_key_editor: ViewHandle<EditorView>,
     anthropic_api_key_editor: ViewHandle<EditorView>,
     google_api_key_editor: ViewHandle<EditorView>,
+    openai_compatible_base_url_editor: ViewHandle<EditorView>,
+    openai_compatible_api_key_editor: ViewHandle<EditorView>,
+    openai_compatible_model_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6323,8 +6326,12 @@ impl ApiKeysWidget {
             openai: openai_key,
             anthropic: anthropic_key,
             google: google_key,
+            openai_compatible,
             ..
         } = ApiKeyManager::as_ref(ctx).keys().clone();
+        let openai_compatible_base_url = openai_compatible.base_url;
+        let openai_compatible_api_key = openai_compatible.api_key;
+        let openai_compatible_model = openai_compatible.model;
 
         // A helper macro to create and configure an API key editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
@@ -6397,6 +6404,64 @@ impl ApiKeysWidget {
             };
         }
 
+        macro_rules! create_openai_compatible_editor {
+            ($editor:ident, $value:ident, $set_func:ident, $placeholder:literal, $is_password:literal) => {
+                let $editor = ctx.add_typed_action_view(move |ctx| {
+                    let appearance = Appearance::handle(ctx).as_ref(ctx);
+                    let options = SingleLineEditorOptions {
+                        is_password: $is_password,
+                        text: TextOptions {
+                            font_size_override: Some(appearance.ui_font_size()),
+                            font_family_override: Some(appearance.monospace_font_family()),
+                            text_colors_override: Some(TextColors {
+                                default_color: appearance.theme().active_ui_text_color(),
+                                disabled_color: appearance.theme().disabled_ui_text_color(),
+                                hint_color: appearance.theme().disabled_ui_text_color(),
+                            }),
+                            ..Default::default()
+                        },
+                        ..Default::default()
+                    };
+                    let mut editor = EditorView::single_line(options, ctx);
+                    editor.set_placeholder_text($placeholder, ctx);
+                    if let Some(value) = &$value {
+                        editor.set_buffer_text(value, ctx);
+                    }
+                    editor
+                });
+                AISettingsPageView::update_editor_interaction_state(
+                    $editor.clone(),
+                    is_any_ai_enabled,
+                    ctx,
+                );
+                ctx.subscribe_to_view(&$editor, |_, $editor, event, ctx| {
+                    if matches!(event, EditorEvent::Blurred | EditorEvent::Enter) {
+                        let buffer_text = $editor.as_ref(ctx).buffer_text(ctx);
+                        let value = buffer_text
+                            .trim()
+                            .is_empty()
+                            .not()
+                            .then(|| buffer_text.trim().to_string());
+                        ApiKeyManager::handle(ctx).update(ctx, |model, ctx| {
+                            model.$set_func(value, ctx);
+                        });
+                    }
+                });
+                let editor_clone = $editor.clone();
+                ctx.subscribe_to_model(&AISettings::handle(ctx), move |_, _, event, ctx| {
+                    if matches!(event, AISettingsChangedEvent::IsAnyAIEnabled { .. }) {
+                        let is_any_ai_enabled = AISettings::as_ref(ctx).is_any_ai_enabled(ctx);
+                        AISettingsPageView::update_editor_interaction_state(
+                            editor_clone.clone(),
+                            is_any_ai_enabled,
+                            ctx,
+                        );
+                        ctx.notify();
+                    }
+                })
+            };
+        }
+
         create_api_key_editor!(openai_api_key_editor, openai_key, set_openai_key, "sk-...");
         create_api_key_editor!(
             anthropic_api_key_editor,
@@ -6410,11 +6475,35 @@ impl ApiKeysWidget {
             set_google_key,
             "AIzaSy..."
         );
+        create_openai_compatible_editor!(
+            openai_compatible_base_url_editor,
+            openai_compatible_base_url,
+            set_openai_compatible_base_url,
+            "http://localhost:8080/v1",
+            false
+        );
+        create_openai_compatible_editor!(
+            openai_compatible_api_key_editor,
+            openai_compatible_api_key,
+            set_openai_compatible_api_key,
+            "sk-...",
+            true
+        );
+        create_openai_compatible_editor!(
+            openai_compatible_model_editor,
+            openai_compatible_model,
+            set_openai_compatible_model,
+            "gpt-4.1",
+            false
+        );
 
         Self {
             openai_api_key_editor,
             anthropic_api_key_editor,
             google_api_key_editor,
+            openai_compatible_base_url_editor,
+            openai_compatible_api_key_editor,
+            openai_compatible_model_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6502,6 +6591,40 @@ impl ApiKeysWidget {
             "Google API Key",
             self.google_api_key_editor.clone(),
             is_enabled,
+            app,
+        ));
+
+        let local_endpoint_enabled = is_any_ai_enabled;
+        column.add_child(
+            Container::new(
+                render_ai_setting_description(
+                    "Use a local OpenAI-compatible endpoint for simple Warp Agent text responses. Set the base URL to your proxy's /v1 endpoint.",
+                    local_endpoint_enabled,
+                    app,
+                ))
+            .with_margin_top(8.)
+            .with_margin_bottom(-styles::DESCRIPTION_MARGIN_BOTTOM)
+            .finish(),
+        );
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenAI-compatible Base URL",
+            self.openai_compatible_base_url_editor.clone(),
+            local_endpoint_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenAI-compatible API Key",
+            self.openai_compatible_api_key_editor.clone(),
+            local_endpoint_enabled,
+            app,
+        ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenAI-compatible Model",
+            self.openai_compatible_model_editor.clone(),
+            local_endpoint_enabled,
             app,
         ));
 
@@ -6600,7 +6723,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt"
+        "api keys bring your own byo openai anthropic google claude gemini gpt base url openai compatible local cliproxyapi"
     }
 
     fn render(

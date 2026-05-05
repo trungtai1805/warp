@@ -22,6 +22,8 @@ pub struct ApiKeys {
     pub anthropic: Option<String>,
     pub openai: Option<String>,
     pub open_router: Option<String>,
+    #[serde(default)]
+    pub openai_compatible: OpenAICompatibleConfig,
 }
 
 impl ApiKeys {
@@ -30,6 +32,71 @@ impl ApiKeys {
             || self.anthropic.is_some()
             || self.google.is_some()
             || self.open_router.is_some()
+    }
+
+    pub fn has_openai_compatible_config(&self) -> bool {
+        self.openai_compatible.normalized().is_some()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct OpenAICompatibleConfig {
+    pub base_url: Option<String>,
+    pub api_key: Option<String>,
+    pub model: Option<String>,
+}
+
+impl OpenAICompatibleConfig {
+    pub fn normalized(&self) -> Option<Self> {
+        let base_url = normalize_optional_string(self.base_url.as_deref())?;
+        Some(Self {
+            base_url: Some(base_url),
+            api_key: normalize_optional_string(self.api_key.as_deref()),
+            model: normalize_optional_string(self.model.as_deref()),
+        })
+    }
+}
+
+fn normalize_optional_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ApiKeys, OpenAICompatibleConfig};
+
+    #[test]
+    fn openai_compatible_config_requires_base_url() {
+        let keys = ApiKeys {
+            openai_compatible: OpenAICompatibleConfig {
+                api_key: Some("sk-test".to_string()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert!(!keys.has_openai_compatible_config());
+    }
+
+    #[test]
+    fn openai_compatible_config_trims_optional_fields() {
+        let config = OpenAICompatibleConfig {
+            base_url: Some("  http://localhost:8080/v1/  ".to_string()),
+            api_key: Some("  sk-test  ".to_string()),
+            model: Some("  gpt-4.1  ".to_string()),
+        };
+
+        assert_eq!(
+            config.normalized(),
+            Some(OpenAICompatibleConfig {
+                base_url: Some("http://localhost:8080/v1/".to_string()),
+                api_key: Some("sk-test".to_string()),
+                model: Some("gpt-4.1".to_string()),
+            })
+        );
     }
 }
 
@@ -91,6 +158,40 @@ impl ApiKeyManager {
         self.keys.open_router = key;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_compatible_api_key(
+        &mut self,
+        key: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.openai_compatible.api_key = key;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_compatible_base_url(
+        &mut self,
+        base_url: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.openai_compatible.base_url = base_url;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_compatible_model(
+        &mut self,
+        model: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.openai_compatible.model = model;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn openai_compatible_config(&self) -> Option<OpenAICompatibleConfig> {
+        self.keys.openai_compatible.normalized()
     }
 
     pub fn set_aws_credentials_state(

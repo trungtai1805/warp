@@ -10,9 +10,12 @@ the upstream BYO API-key entitlement logic.
 - Keep the patch easy to rebase on top of upstream Warp.
 - Store local endpoint settings in the same secure local API-key storage path as
   existing provider keys.
-- Add settings UI for a local OpenAI-compatible base URL, API key, and model.
+- Add settings UI for a local OpenAI-compatible base URL, API key, model, and
+  optional reasoning effort.
 - Route simple text Agent requests to a local `/chat/completions` endpoint when
   a local base URL is configured.
+- Surface proxy/model usage in the conversation metadata and model selector
+  label so users can tell when local routing is active.
 - Preserve the existing Warp-hosted multi-agent path when local config is absent
   or the input is not a simple user-query flow.
 
@@ -29,11 +32,12 @@ the upstream BYO API-key entitlement logic.
 | File | Responsibility |
 | --- | --- |
 | `crates/ai/src/api_keys.rs` | Adds `OpenAICompatibleConfig`, normalization, setters, and secure-storage serialization. |
-| `app/src/settings_view/ai_page.rs` | Adds three local endpoint settings fields in Settings > API Keys. |
+| `app/src/settings_view/ai_page.rs` | Adds local endpoint settings fields in Settings > API Keys. |
 | `app/src/ai/request_usage_model.rs` | Allows AI availability checks to pass when local endpoint config exists. |
 | `app/src/ai/agent/api.rs` | Carries normalized local endpoint config on `RequestParams`. |
 | `app/src/ai/agent/api/impl.rs` | Chooses the local adapter before constructing the Warp-hosted multi-agent request. |
 | `app/src/ai/agent/api/openai_compatible.rs` | Builds OpenAI chat-completion requests and translates text responses back into Warp Agent stream events. |
+| `app/src/terminal/profile_model_selector.rs` | Displays `Proxy: <model>` while local routing is configured. |
 
 ## Configuration
 
@@ -45,6 +49,7 @@ used by `ApiKeyManager`.
 | OpenAI-compatible Base URL | Yes | Usually `http://127.0.0.1:<port>/v1`. The adapter appends `/chat/completions` unless the URL already ends with it. |
 | OpenAI-compatible API Key | No | Sent as `Authorization: Bearer <key>` when non-empty. Leave empty when the proxy does not require a key. |
 | OpenAI-compatible Model | No | If empty, the currently selected Warp model id is sent as the `model` field. For most proxies, set this explicitly. |
+| OpenAI-compatible Reasoning Effort | No | When set, sent as top-level `reasoning_effort`. Typical values are `low`, `medium`, `high`, or `xhigh`, depending on what the proxy/model accepts. Leave empty if your proxy expects reasoning to be encoded in the model alias instead. |
 
 Clearing the Base URL disables the local adapter and returns Agent requests to
 Warp's normal hosted route.
@@ -65,6 +70,7 @@ flowchart TD
     LocalAdapter --> Proxy[/OpenAI-compatible proxy\nPOST /chat/completions/]
     Proxy --> LocalAdapter
     LocalAdapter --> WarpEvents[Warp ResponseEvent stream]
+    KeyManager --> ModelChip[Model selector label\nProxy: model]
 
     RouteDecision -- no --> WarpServer[Warp hosted /ai/multi-agent]
     WarpServer --> WarpEvents
@@ -105,7 +111,7 @@ sequenceDiagram
     participant Proxy as OpenAI-compatible proxy
     participant Agent as Agent UI
 
-    Dev->>UI: Set Base URL, API Key, Model
+    Dev->>UI: Set Base URL, API Key, Model, Reasoning Effort
     UI->>KM: set_openai_compatible_*()
     KM->>KM: normalize and write secure storage
 
@@ -133,9 +139,12 @@ The adapter builds a non-streaming OpenAI chat-completions request:
     { "role": "system", "content": "..." },
     { "role": "user", "content": "..." }
   ],
-  "stream": false
+  "stream": false,
+  "reasoning_effort": "high"
 }
 ```
+
+`reasoning_effort` is omitted when the setting is empty.
 
 Conversation history is best-effort:
 
@@ -148,7 +157,7 @@ The adapter translates the proxy response into Warp stream events:
 
 1. `ResponseEvent::Init`
 2. `ResponseEvent::ClientActions` with optional `CreateTask` and one
-   `AddMessagesToTask` containing an `AgentOutput`
+   `AddMessagesToTask` containing `ModelUsed` followed by `AgentOutput`
 3. `ResponseEvent::Finished(Done)`
 
 HTTP and JSON failures become `ResponseEvent::Finished(InternalError)` so the
@@ -179,7 +188,8 @@ The adapter itself is isolated in `app/src/ai/agent/api/openai_compatible.rs`.
 - No OpenAI tool-call bridge.
 - No file edit, shell command, MCP, subagent, computer-use, research, or
   orchestration support.
-- No model/provider validation beyond sending the configured model string.
+- No model/provider validation beyond sending the configured model string and
+  optional reasoning-effort string.
 - No proxy-specific auth schemes beyond optional Bearer auth.
 
 ## Improvement Paths
@@ -226,7 +236,9 @@ Assuming CLIProxyAPI exposes an OpenAI-compatible endpoint on port `8080`:
 | Base URL | `http://127.0.0.1:8080/v1` |
 | API Key | proxy-specific key, or empty if not required |
 | Model | model name exposed by CLIProxyAPI |
+| Reasoning Effort | `medium`, `high`, `xhigh`, or empty if CLIProxyAPI expects a model alias |
 
 Submit a normal Warp Agent text prompt after saving the settings. If the Base
 URL is valid, the request should bypass Warp's `/ai/multi-agent` route and go to
-the local proxy.
+the local proxy. The model selector label should show `Proxy: <model>` while the
+local Base URL is configured.

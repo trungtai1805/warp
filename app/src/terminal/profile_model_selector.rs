@@ -96,6 +96,26 @@ pub fn calculate_max_profile_name_width(appearance: &warp_core::ui::appearance::
     scaled_font_size * MAX_PROFILE_NAME_WIDTH_SCALE_FACTOR
 }
 
+fn openai_compatible_model_display_name(app: &AppContext, fallback_model_name: String) -> String {
+    let Some(config) = ApiKeyManager::as_ref(app).openai_compatible_config() else {
+        return fallback_model_name;
+    };
+
+    let model_name = config.model.as_deref().unwrap_or(&fallback_model_name);
+    format_openai_compatible_model_label(model_name, config.reasoning_effort.as_deref())
+}
+
+fn format_openai_compatible_model_label(
+    model_name: &str,
+    reasoning_effort: Option<&str>,
+) -> String {
+    let mut label = format!("Proxy: {model_name}");
+    if let Some(reasoning_effort) = reasoning_effort {
+        label.push_str(&format!(" ({reasoning_effort})"));
+    }
+    label
+}
+
 #[derive(Clone, Debug)]
 enum ButtonTextColor {
     Fill(Fill),
@@ -476,11 +496,11 @@ impl ProfileModelSelector {
             me.handle_appearance_change(ctx);
         });
 
-        // Refresh model menu when BYO API keys update so the key icons reflect the latest state.
+        // Refresh model state when API keys update so key icons and local proxy labels stay current.
         ctx.subscribe_to_model(
             &ApiKeyManager::handle(ctx),
             |me, _model, _event: &ApiKeyManagerEvent, ctx| {
-                me.refresh_model_menu(ctx);
+                me.refresh_state(ctx);
                 ctx.notify();
             },
         );
@@ -627,11 +647,12 @@ impl ProfileModelSelector {
                 llm_preferences.get_active_base_model(ctx, Some(self.terminal_view_id))
             };
 
-            if let Some(description) = &active_llm.description {
+            let fallback_model_name = if let Some(description) = &active_llm.description {
                 format!("{} ({})", active_llm.display_name, description)
             } else {
                 active_llm.display_name.clone()
-            }
+            };
+            openai_compatible_model_display_name(ctx, fallback_model_name)
         };
         self.model_button.update(ctx, |button, ctx| {
             button.set_label(model_name, ctx);
@@ -1385,7 +1406,7 @@ impl ProfileModelSelector {
                 .is_agent_in_control_or_tagged_in();
         drop(terminal_model);
 
-        let model_display_name = if is_lrc {
+        let fallback_model_display_name = if is_lrc {
             llm_preferences
                 .get_active_cli_agent_model(app, Some(self.terminal_view_id))
                 .menu_display_name()
@@ -1394,6 +1415,8 @@ impl ProfileModelSelector {
                 .get_active_base_model(app, Some(self.terminal_view_id))
                 .menu_display_name()
         };
+        let model_display_name =
+            openai_compatible_model_display_name(app, fallback_model_display_name);
 
         let text_color = if self.is_blurred {
             theme.disabled_text_color(theme.surface_1()).into()
@@ -2024,4 +2047,21 @@ impl View for ProfileModelSelector {
 
 impl Entity for ProfileModelSelector {
     type Event = ProfileModelSelectorEvent;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_openai_compatible_model_label;
+
+    #[test]
+    fn formats_openai_compatible_model_label() {
+        assert_eq!(
+            format_openai_compatible_model_label("gpt-5.5", Some("high")),
+            "Proxy: gpt-5.5 (high)"
+        );
+        assert_eq!(
+            format_openai_compatible_model_label("gpt-5.5", None),
+            "Proxy: gpt-5.5"
+        );
+    }
 }

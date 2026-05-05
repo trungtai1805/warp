@@ -6310,6 +6310,7 @@ struct ApiKeysWidget {
     openai_compatible_base_url_editor: ViewHandle<EditorView>,
     openai_compatible_api_key_editor: ViewHandle<EditorView>,
     openai_compatible_model_editor: ViewHandle<EditorView>,
+    openai_compatible_reasoning_effort_editor: ViewHandle<EditorView>,
 
     can_use_warp_credits_with_byok: SwitchStateHandle,
     upgrade_highlight_index: HighlightedHyperlink,
@@ -6332,6 +6333,7 @@ impl ApiKeysWidget {
         let openai_compatible_base_url = openai_compatible.base_url;
         let openai_compatible_api_key = openai_compatible.api_key;
         let openai_compatible_model = openai_compatible.model;
+        let openai_compatible_reasoning_effort = openai_compatible.reasoning_effort;
 
         // A helper macro to create and configure an API key editor.  This avoids a lot
         // of code duplication and ensures consistency between the editors.
@@ -6496,6 +6498,13 @@ impl ApiKeysWidget {
             "gpt-4.1",
             false
         );
+        create_openai_compatible_editor!(
+            openai_compatible_reasoning_effort_editor,
+            openai_compatible_reasoning_effort,
+            set_openai_compatible_reasoning_effort,
+            "medium",
+            false
+        );
 
         Self {
             openai_api_key_editor,
@@ -6504,6 +6513,7 @@ impl ApiKeysWidget {
             openai_compatible_base_url_editor,
             openai_compatible_api_key_editor,
             openai_compatible_model_editor,
+            openai_compatible_reasoning_effort_editor,
 
             can_use_warp_credits_with_byok: Default::default(),
             upgrade_highlight_index: Default::default(),
@@ -6627,6 +6637,13 @@ impl ApiKeysWidget {
             local_endpoint_enabled,
             app,
         ));
+        column.add_child(render_api_key_input(
+            appearance,
+            "OpenAI-compatible Reasoning Effort",
+            self.openai_compatible_reasoning_effort_editor.clone(),
+            local_endpoint_enabled,
+            app,
+        ));
 
         // Show upgrade CTA if BYOK is not enabled
         if !is_byo_enabled {
@@ -6723,7 +6740,7 @@ impl SettingsWidget for ApiKeysWidget {
     type View = AISettingsPageView;
 
     fn search_terms(&self) -> &str {
-        "api keys bring your own byo openai anthropic google claude gemini gpt base url openai compatible local cliproxyapi"
+        "api keys bring your own byo openai anthropic google claude gemini gpt base url openai compatible local cliproxyapi reasoning effort medium high xhigh"
     }
 
     fn render(

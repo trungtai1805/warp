@@ -44,6 +44,7 @@ pub struct OpenAICompatibleConfig {
     pub base_url: Option<String>,
     pub api_key: Option<String>,
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
 }
 
 impl OpenAICompatibleConfig {
@@ -53,6 +54,7 @@ impl OpenAICompatibleConfig {
             base_url: Some(base_url),
             api_key: normalize_optional_string(self.api_key.as_deref()),
             model: normalize_optional_string(self.model.as_deref()),
+            reasoning_effort: normalize_optional_string(self.reasoning_effort.as_deref()),
         })
     }
 }
@@ -87,6 +89,7 @@ mod tests {
             base_url: Some("  http://localhost:8080/v1/  ".to_string()),
             api_key: Some("  sk-test  ".to_string()),
             model: Some("  gpt-4.1  ".to_string()),
+            reasoning_effort: Some("  high  ".to_string()),
         };
 
         assert_eq!(
@@ -95,6 +98,7 @@ mod tests {
                 base_url: Some("http://localhost:8080/v1/".to_string()),
                 api_key: Some("sk-test".to_string()),
                 model: Some("gpt-4.1".to_string()),
+                reasoning_effort: Some("high".to_string()),
             })
         );
     }
@@ -186,6 +190,16 @@ impl ApiKeyManager {
         ctx: &mut ModelContext<Self>,
     ) {
         self.keys.openai_compatible.model = model;
+        ctx.emit(ApiKeyManagerEvent::KeysUpdated);
+        self.write_keys_to_secure_storage(ctx);
+    }
+
+    pub fn set_openai_compatible_reasoning_effort(
+        &mut self,
+        reasoning_effort: Option<String>,
+        ctx: &mut ModelContext<Self>,
+    ) {
+        self.keys.openai_compatible.reasoning_effort = reasoning_effort;
         ctx.emit(ApiKeyManagerEvent::KeysUpdated);
         self.write_keys_to_secure_storage(ctx);
     }

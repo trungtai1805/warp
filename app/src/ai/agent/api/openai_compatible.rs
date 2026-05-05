@@ -25,6 +25,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatCompletionMessage>,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -58,6 +60,8 @@ struct ClientActionContext {
     request_id: String,
     create_task: bool,
     task_description: String,
+    model_id: String,
+    model_display_name: String,
 }
 
 pub fn should_use(params: &RequestParams) -> bool {
@@ -101,6 +105,11 @@ pub async fn generate_multi_agent_output(
         request_id: request_id.clone(),
         create_task: params.tasks.is_empty(),
         task_description: latest_user_query(&params).unwrap_or_default(),
+        model_id: request.model.clone(),
+        model_display_name: openai_compatible_model_display_name(
+            &request.model,
+            config.reasoning_effort.as_deref(),
+        ),
     };
 
     let stream = async_stream::stream! {
@@ -207,6 +216,7 @@ fn build_chat_completion_request(
             .unwrap_or_else(|| params.model.as_str().to_string()),
         messages,
         stream: false,
+        reasoning_effort: config.reasoning_effort.clone(),
     })
 }
 
@@ -276,6 +286,14 @@ fn content_to_text(content: &Value) -> Option<String> {
     }
 }
 
+fn openai_compatible_model_display_name(model: &str, reasoning_effort: Option<&str>) -> String {
+    let mut display_name = format!("OpenAI-compatible proxy: {model}");
+    if let Some(reasoning_effort) = reasoning_effort {
+        display_name.push_str(&format!(" (reasoning: {reasoning_effort})"));
+    }
+    display_name
+}
+
 fn init_event(conversation_id: String, request_id: String, run_id: String) -> api::ResponseEvent {
     api::ResponseEvent {
         r#type: Some(api::response_event::Type::Init(
@@ -311,17 +329,32 @@ fn client_actions_event(context: &ClientActionContext, text: String) -> api::Res
         action: Some(api::client_action::Action::AddMessagesToTask(
             api::client_action::AddMessagesToTask {
                 task_id: context.task_id.clone(),
-                messages: vec![api::Message {
-                    id: Uuid::new_v4().to_string(),
-                    task_id: context.task_id.clone(),
-                    request_id: context.request_id.clone(),
-                    timestamp: None,
-                    server_message_data: String::new(),
-                    citations: vec![],
-                    message: Some(api::message::Message::AgentOutput(
-                        api::message::AgentOutput { text },
-                    )),
-                }],
+                messages: vec![
+                    api::Message {
+                        id: Uuid::new_v4().to_string(),
+                        task_id: context.task_id.clone(),
+                        request_id: context.request_id.clone(),
+                        timestamp: None,
+                        server_message_data: String::new(),
+                        citations: vec![],
+                        message: Some(api::message::Message::ModelUsed(api::message::ModelUsed {
+                            model_id: context.model_id.clone(),
+                            model_display_name: context.model_display_name.clone(),
+                            is_fallback: false,
+                        })),
+                    },
+                    api::Message {
+                        id: Uuid::new_v4().to_string(),
+                        task_id: context.task_id.clone(),
+                        request_id: context.request_id.clone(),
+                        timestamp: None,
+                        server_message_data: String::new(),
+                        citations: vec![],
+                        message: Some(api::message::Message::AgentOutput(
+                            api::message::AgentOutput { text },
+                        )),
+                    },
+                ],
             },
         )),
     });
@@ -451,11 +484,13 @@ mod tests {
             base_url: Some("http://localhost:8080/v1".to_string()),
             api_key: None,
             model: Some("gpt-local".to_string()),
+            reasoning_effort: Some("medium".to_string()),
         };
 
         let request = build_chat_completion_request(&params, &config).unwrap();
 
         assert_eq!(request.model, "gpt-local");
+        assert_eq!(request.reasoning_effort.as_deref(), Some("medium"));
         assert_eq!(request.messages[1].role, "assistant");
         assert_eq!(request.messages[1].content, "Previous answer");
         assert_eq!(request.messages.last().unwrap().content, "Next question");
@@ -484,6 +519,8 @@ mod tests {
                 request_id: "request-1".to_string(),
                 create_task: true,
                 task_description: "Hello".to_string(),
+                model_id: "gpt-5.5".to_string(),
+                model_display_name: "OpenAI-compatible proxy: gpt-5.5".to_string(),
             },
             "Hi".to_string(),
         );
@@ -499,6 +536,40 @@ mod tests {
         assert!(matches!(
             actions.actions[1].action,
             Some(api::client_action::Action::AddMessagesToTask(_))
+        ));
+    }
+
+    #[test]
+    fn adds_model_used_before_agent_output() {
+        let event = client_actions_event(
+            &ClientActionContext {
+                task_id: "task-1".to_string(),
+                request_id: "request-1".to_string(),
+                create_task: false,
+                task_description: "Hello".to_string(),
+                model_id: "gpt-5.5".to_string(),
+                model_display_name: "OpenAI-compatible proxy: gpt-5.5 (reasoning: high)"
+                    .to_string(),
+            },
+            "Hi".to_string(),
+        );
+        let Some(api::response_event::Type::ClientActions(actions)) = event.r#type else {
+            panic!("expected client actions event");
+        };
+        let Some(api::client_action::Action::AddMessagesToTask(add_messages)) =
+            &actions.actions[0].action
+        else {
+            panic!("expected add messages action");
+        };
+
+        assert_eq!(add_messages.messages.len(), 2);
+        assert!(matches!(
+            add_messages.messages[0].message,
+            Some(api::message::Message::ModelUsed(_))
+        ));
+        assert!(matches!(
+            add_messages.messages[1].message,
+            Some(api::message::Message::AgentOutput(_))
         ));
     }
 }
